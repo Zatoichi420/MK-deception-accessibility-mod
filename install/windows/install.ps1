@@ -1,5 +1,5 @@
 <#
-Install the MK:DA talking-menu daemon on Windows as a hidden auto-start task.
+Install the MK: Deception talking-menu daemon on Windows as a hidden auto-start task.
 
     powershell -ExecutionPolicy Bypass -File install\windows\install.ps1
     powershell -ExecutionPolicy Bypass -File install\windows\install.ps1 -Uninstall
@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $TaskName   = "mkdeception-menu-reader"
 $RepoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $InstallDir = Join-Path $env:LOCALAPPDATA "mkdeception-talking-menu"
-$Log        = Join-Path $InstallDir "menu_reader.log"
+$Log        = Join-Path $InstallDir "deception_reader.log"
 
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -30,10 +30,13 @@ if (-not $py) { throw "Python 3 not found on PATH. Install from https://python.o
 $cfg = Join-Path $env:APPDATA "RetroArch\retroarch.cfg"
 if (Test-Path $cfg) {
     $c = Get-Content $cfg -Raw
-    if ($c -match 'network_cmd_enable = "false"') {
-        Read-Host "Quit RetroArch, then press Enter to set network_cmd_enable = true"
-        ($c -replace 'network_cmd_enable = "false"', 'network_cmd_enable = "true"') | Set-Content $cfg -NoNewline
-        Write-Host "  set network_cmd_enable = true"
+    if ($c -match 'network_cmd_enable = "false"' -or $c -match 'network_remote_enable(_user_p1)? = "true"') {
+        Read-Host "Quit RetroArch, then press Enter to fix its network settings"
+        $c = $c -replace 'network_cmd_enable = "false"', 'network_cmd_enable = "true"'
+        $c = $c -replace 'network_remote_enable = "true"', 'network_remote_enable = "false"'
+        $c = $c -replace 'network_remote_enable_user_p1 = "true"', 'network_remote_enable_user_p1 = "false"'
+        $c | Set-Content $cfg -NoNewline
+        Write-Host "  network_cmd_enable = true ; network_remote_enable = false"
     }
 } else {
     Write-Host "NOTE: enable RetroArch > Settings > Network > Network Commands."
@@ -57,10 +60,10 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit 0
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Description "MK: Deadly Alliance talking-menu daemon" -Force | Out-Null
+    -Description "MK: Deception talking-menu daemon" -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host ""
-Write-Host "Installed. Start MK: Deadly Alliance in RetroArch to hear the menus."
+Write-Host "Installed. Start MK: Deception in RetroArch to hear the menus."
 Write-Host "  log:  Get-Content `"$Log`" -Wait"
 Write-Host "  test: python `"$InstallDir\deception_reader.py`" --probe"

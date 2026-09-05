@@ -32,7 +32,7 @@ python deception_reader.py --probe        # live state, no speech
 python deception_reader.py                # with speech
 
 # print what it would say, without speaking:
-MKDA_SPEAK_BACKEND=log python deception_reader.py
+MK_SPEAK_BACKEND=log python deception_reader.py
 ```
 
 The reverse-engineering / calibration helpers in `tools/` need

@@ -9,9 +9,7 @@ OCR) but the logic is portable.
 |---|---|
 | `gc_extract.py` | minimal GameCube disc reader — pull `main.dol` / `mk5gc_release.elf`, list & extract files. Works on plain ISO and NKit ISO. |
 | `ppcdis.py` | disassemble a function in `mk5gc_release.elf` (capstone) and resolve `r13`/`r2` small-data accesses to global-variable names. Needs `pip install pyelftools capstone`. |
-| `nav.py` | drive the game to a known screen (main menu, character select) using injected input + OCR, for calibration. |
 | `see.py` | OCR the current RetroArch frame via the AI-service pipeline. |
-| `diffscan.py` | press a button, diff RAM, report addresses that behave like a cursor. |
 | `calibrate.py`, `verify.py` | full automated walks of the menus / roster, dumping address ↔ label maps. |
 | `test_daemon_menu.py` | run the daemon's `narrate()` against a live menu walk, printing every phrase. |
 

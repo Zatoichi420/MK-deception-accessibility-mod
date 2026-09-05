@@ -50,6 +50,8 @@ class DeceptionReader:
         self._pending = None
         self._pending_since = 0.0
         self._last_ctx = None
+        self._ctx_candidate = None
+        self._ctx_streak = 0
         self._roster_cache: dict[int, str] = {}
         self._region_warned = False
 
@@ -153,8 +155,19 @@ class DeceptionReader:
         return tuple(kb), " . ".join(parts), "Character select"
 
     def narrate(self, s: dict):
-        ctx = self._classify(s)
+        raw_ctx = self._classify(s)
         now = time.monotonic()
+
+        # a new non-idle context must hold for two polls before we act on it
+        if raw_ctx == self._ctx_candidate:
+            self._ctx_streak += 1
+        else:
+            self._ctx_candidate, self._ctx_streak = raw_ctx, 1
+        if raw_ctx == Ctx.IDLE or self._ctx_streak >= 2:
+            ctx = raw_ctx
+        else:
+            return
+
         if ctx != self._last_ctx:
             self._last_ctx = ctx
             if ctx == Ctx.CHARSELECT:

@@ -1,5 +1,5 @@
 [Unit]
-Description=MK: Deadly Alliance talking-menu daemon
+Description=MK: Deception talking-menu daemon
 After=graphical-session.target
 
 [Service]

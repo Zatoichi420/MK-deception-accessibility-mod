@@ -1,59 +1,56 @@
-#!/bin/bash
-# Install the MK:DA talking-menu daemon as a per-user launchd agent (macOS).
-# Re-run any time to update. `./install.sh uninstall` to remove.
+#!/usr/bin/env bash
+# Install the MK: Deception talking-menu daemon as a systemd --user service (Linux).
+# `./install.sh uninstall` to remove.
 set -euo pipefail
 
-LABEL="com.orlando.mkdeception-menu-reader"
-SRC_DIR="$(cd "$(dirname "$0")/../.." && pwd)"          # repo root
-INSTALL_DIR="$HOME/Library/Application Support/mkdeception-talking-menu"
-PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="$HOME/Library/Logs/mkdeception-menu-reader.log"
-PYTHON="$(command -v python3 || echo /usr/bin/python3)"
-UID_NUM="$(id -u)"
+NAME="mkdeception-menu-reader"
+SRC_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mkdeception-talking-menu"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 if [ "${1:-}" = "uninstall" ]; then
-    launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
-    rm -f "$PLIST_DST"
+    systemctl --user disable --now "$NAME.service" 2>/dev/null || true
+    rm -f "$UNIT_DIR/$NAME.service"
     rm -rf "$INSTALL_DIR"
+    systemctl --user daemon-reload || true
     echo "uninstalled."
     exit 0
 fi
 
-# 1. enable RetroArch's network command interface
-CFG="$HOME/Library/Application Support/RetroArch/config/retroarch.cfg"
-if [ -f "$CFG" ]; then
-    if grep -q '^network_cmd_enable = "false"' "$CFG"; then
-        echo "Quit RetroArch, then press Return to enable its network command interface..."
-        read -r _
-        sed -i '' 's/^network_cmd_enable = "false"/network_cmd_enable = "true"/' "$CFG"
-        echo "  set network_cmd_enable = true"
-    fi
-else
-    echo "WARNING: retroarch.cfg not found; make sure 'network_cmd_enable = true' is set"
-    echo "  (RetroArch: Settings > Network > Network Commands)."
+# 1. a TTS backend
+if ! command -v spd-say >/dev/null && ! command -v espeak-ng >/dev/null && ! command -v espeak >/dev/null; then
+    echo "WARNING: no TTS found. Install one, e.g.:"
+    echo "  Debian/Ubuntu:  sudo apt install speech-dispatcher espeak-ng"
+    echo "  Fedora:         sudo dnf install speech-dispatcher espeak-ng"
+    echo "  Arch:           sudo pacman -S speech-dispatcher espeak-ng"
 fi
 
-# 2. copy the daemon somewhere launchd is allowed to read (NOT ~/Desktop / iCloud)
-mkdir -p "$INSTALL_DIR"
-cp "$SRC_DIR/deception_reader.py" "$SRC_DIR/ra_client.py" "$SRC_DIR/deception_addrs.py" "$SRC_DIR/speak.py" "$INSTALL_DIR/"
+# 2. RetroArch network command interface
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}/retroarch/retroarch.cfg"
+if [ -f "$CFG" ]; then
+    if grep -qE '^network_cmd_enable = "false"|^network_remote_enable(_user_p1)? = "true"' "$CFG"; then
+        echo "Quit RetroArch, then press Return to fix its network settings ..."
+        read -r _
+        sed -i 's/^network_cmd_enable = "false"/network_cmd_enable = "true"/' "$CFG"
+        sed -i 's/^network_remote_enable = "true"/network_remote_enable = "false"/' "$CFG"
+        sed -i 's/^network_remote_enable_user_p1 = "true"/network_remote_enable_user_p1 = "false"/' "$CFG"
+        echo "  network_cmd_enable = true ; network_remote_enable = false"
+    fi
+else
+    echo "NOTE: in RetroArch set Network Commands = ON and Network Remote = OFF."
+fi
 
-# 3. write the launch agent
-mkdir -p "$HOME/Library/LaunchAgents"
-sed -e "s|__PYTHON__|$PYTHON|g" \
-    -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
-    -e "s|__LOG__|$LOG|g" \
-    "$SRC_DIR/install/macos/$LABEL.plist" > "$PLIST_DST"
+# 3. install files + unit
+mkdir -p "$INSTALL_DIR" "$UNIT_DIR"
+cp "$SRC_DIR"/deception_reader.py "$SRC_DIR"/ra_client.py "$SRC_DIR"/deception_addrs.py "$SRC_DIR"/speak.py "$INSTALL_DIR/"
+sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$SRC_DIR/install/linux/$NAME.service" > "$UNIT_DIR/$NAME.service"
 
-# 4. keep RetroArch awake in the background so its command port stays responsive
-defaults write org.libretro.RetroArch NSAppSleepDisabled -bool YES || true
-
-# 5. (re)load
-launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST"
+systemctl --user daemon-reload
+systemctl --user enable --now "$NAME.service"
 sleep 1
-launchctl print "gui/$UID_NUM/$LABEL" | grep -E 'state = |pid = ' || true
+systemctl --user --no-pager status "$NAME.service" | head -6 || true
 
 echo
-echo "Installed. Start MK: Deadly Alliance in RetroArch and you should hear the menus."
-echo "  log:  tail -f \"$LOG\""
+echo "Installed. Start MK: Deception in RetroArch to hear the menus."
+echo "  log:  journalctl --user -u $NAME -f"
 echo "  test: python3 \"$INSTALL_DIR/deception_reader.py\" --probe"

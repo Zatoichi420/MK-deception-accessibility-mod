@@ -25,8 +25,8 @@ from ra_client import RAClient, RetroArchError
 import deception_addrs as A
 from speak import Speaker
 
-POLL_HZ = 12
-SETTLE_S = 0.10
+POLL_HZ = 20
+SETTLE_S = 0.06
 
 def read_cstring(ra: RAClient, addr: int, maxlen: int = 48) -> str:
     if not (0x80003000 <= addr < 0x81800000):
@@ -107,18 +107,30 @@ class DeceptionReader:
     # -- snapshot ----------------------------------------------------
 
     def snapshot(self) -> dict:
+        """RetroArch's command interface handles ~1 command per emulated frame
+        (~16 ms), so read in a few blocks, not one call per variable."""
         r = self.ra
-        s = {
-            "menu_mode": r.read_u32(A.MENU_MODE_VAR),
-            "menu_sub": r.read_u32(A.MENU_MODE_SUB_VAR),
-            "arena_sub": r.read_u32(A.ARENA_SUB_MENU_VAR),
-            "pselect_mode": r.read_u32(A.PSELECT_MODE),
-            "p1_selbox": r.read_u32(A.P1_SELBOX_POS),
-            "p2_selbox": r.read_u32(A.P2_SELBOX_POS),
-            "arena_active": r.read_u32(A.F_ARENA_SELECT_ACTIVE),
+        a = r.read_memory(0x805107f8, 64)     # arena_active .. pselect_mode cluster
+        b = r.read_memory(0x80510e44, 20)     # menu_mode_var / _sub_var / arena_sub_menu_var
+
+        def ua(addr):
+            o = addr - 0x805107f8
+            return int.from_bytes(a[o:o + 4], "big")
+
+        def ub(addr):
+            o = addr - 0x80510e44
+            return int.from_bytes(b[o:o + 4], "big")
+
+        return {
+            "menu_mode": ub(A.MENU_MODE_VAR),
+            "menu_sub": ub(A.MENU_MODE_SUB_VAR),
+            "arena_sub": ub(A.ARENA_SUB_MENU_VAR),
+            "pselect_mode": ua(A.PSELECT_MODE),
+            "p1_selbox": ua(A.P1_SELBOX_POS),
+            "p2_selbox": ua(A.P2_SELBOX_POS),
+            "arena_active": ua(A.F_ARENA_SELECT_ACTIVE),
             "mode_of_play": r.read_u32(A.MODE_OF_PLAY),
         }
-        return s
 
     # -- classify + narrate ---------------------------------------
 

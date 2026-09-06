@@ -307,13 +307,39 @@ def _fmt(s: dict) -> str:
             f"p2_selbox={s['p2_selbox']} arena_active={s['arena_active']}")
 
 
+def _autostart(action: str) -> int:
+    """--install / --uninstall / --status: register this daemon (the downloaded
+    binary or this script) with the OS's per-user service manager. Kept in its
+    own module so the hot path never imports it."""
+    import autostart
+    try:
+        fn = {"install": autostart.install,
+              "uninstall": autostart.uninstall,
+              "status": autostart.status}[action]
+        print(fn(), flush=True)
+        return 0
+    except autostart.AutostartError as e:
+        print(f"autostart {action} failed: {e}", file=sys.stderr)
+        return 1
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--probe", action="store_true")
-    ap.add_argument("--once", action="store_true")
+    ap = argparse.ArgumentParser(
+        description="MK: Deception talking-menu daemon (reads only; never writes).")
+    ap.add_argument("--probe", action="store_true", help="print live state, no speech")
+    ap.add_argument("--once", action="store_true", help="one snapshot, then exit")
+    ap.add_argument("--install", dest="autostart_action", action="store_const",
+                    const="install", help="run automatically in the background at login")
+    ap.add_argument("--uninstall", dest="autostart_action", action="store_const",
+                    const="uninstall", help="undo --install")
+    ap.add_argument("--status", dest="autostart_action", action="store_const",
+                    const="status", help="is the background service installed?")
     ap.add_argument("--host", default=os.environ.get("MK_RA_HOST", "127.0.0.1"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("MK_RA_PORT", "55355")))
     args = ap.parse_args()
+
+    if args.autostart_action:
+        sys.exit(_autostart(args.autostart_action))
 
     ra = RAClient(cmd_host=args.host, cmd_port=args.port)
     if args.once or args.probe:

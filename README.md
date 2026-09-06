@@ -39,9 +39,10 @@ identical on every host. See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 - **RetroArch** with the **Dolphin** core.
 - *Mortal Kombat: Deception*, **USA release** (disc id `GQNE5D`) — your own
   legally-obtained copy, any dump format (ISO / RVZ / NKit).
-- **Python 3.8+**.
 - TTS: built in on macOS (`say`) and Windows (SAPI); on Linux
   `sudo apt install speech-dispatcher espeak-ng` (or your distro's equivalent).
+- Python is **not** required if you use the downloaded binary below. It is only
+  needed to run from source (Python 3.8+).
 
 ## Setup — step by step
 
@@ -51,22 +52,45 @@ Assumes RetroArch + the Dolphin core + your disc image are already working.
 RetroArch → **Settings → Network → Network Commands → ON** (port `55355`). Or, with
 RetroArch closed, set `network_cmd_enable = "true"` in `retroarch.cfg`.
 
-**2. Check Python and a voice.** `python --version`; on Linux test `spd-say hello`.
+**2. Download the reader for your system** from the
+[**Releases**](https://github.com/Zatoichi420/MK-deception-accessibility-mod/releases)
+page — one file, nothing to install:
 
-**3. Get the code and install the daemon.**
+| System | File |
+|---|---|
+| Windows | `mkdeception-reader-windows-x86_64.exe` |
+| macOS (Apple Silicon) | `mkdeception-reader-macos-arm64` |
+| Linux | `mkdeception-reader-linux-x86_64` |
+
+**3. Run it.** Two ways:
+
+- **Just run it when you play** — double-click it, or from a terminal
+  `./mkdeception-reader` (`mkdeception-reader-windows-x86_64.exe` on Windows).
+  Leave it running while you play; close it when you're done.
+- **Or have it start on its own:** run it once with `--install`. It registers a
+  hidden per-user background service (launchd / systemd / Task Scheduler) and
+  starts every time you log in. `--uninstall` removes it, `--status` reports it.
+
+  ```
+  ./mkdeception-reader --install
+  ```
+
+  On macOS the first run may be blocked by Gatekeeper — right-click → Open, or
+  `xattr -d com.apple.quarantine ./mkdeception-reader`.
+
+<details>
+<summary>Run from source instead (for contributors)</summary>
+
 ```bash
 git clone https://github.com/Zatoichi420/MK-deception-accessibility-mod
 cd MK-deception-accessibility-mod
+python deception_reader.py            # run it now
+python deception_reader.py --install  # or register the background service
 ```
-Then, for your OS (each takes an `uninstall` argument):
 
-| OS | command |
-|---|---|
-| macOS | `install/macos/install.sh` |
-| Linux | `install/linux/install.sh` |
-| Windows | `powershell -ExecutionPolicy Bypass -File install\windows\install.ps1` |
-
-Or skip the installer and just run `python deception_reader.py` in a terminal when you play.
+The repo's `install/{macos,linux,windows}/` scripts do the same thing plus
+fix RetroArch's network settings for you.
+</details>
 
 **4. Play.** Start MK: Deception in RetroArch. The daemon notices it within a
 second or two (silent during the logos). Press Start to the main menu — you'll
@@ -75,9 +99,10 @@ select, moving across the roster speaks the fighter names.
 
 **5. Check / troubleshoot.**
 ```bash
-python deception_reader.py --once     # should print a state line
-python deception_reader.py --probe    # live raw state, no speech
+./mkdeception-reader --once     # should print a state line
+./mkdeception-reader --probe    # live raw state, no speech
 ```
+(`python deception_reader.py --once` etc. from a source checkout.)
 Logs: `~/Library/Logs/mkdeception-menu-reader.log` (macOS) ·
 `journalctl --user -u mkdeception-menu-reader` (Linux) ·
 `%LOCALAPPDATA%\mkdeception-talking-menu\deception_reader.log` (Windows).

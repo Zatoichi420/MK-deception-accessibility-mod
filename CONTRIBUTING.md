@@ -12,11 +12,25 @@ and be kind in issues and PRs — see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 | Area | What's needed |
 |---|---|
 | **Testing on Windows / Linux** | The daemon and installers are written for all three OSes but only macOS is verified. A "it works" or a bug report from Windows/Linux is valuable. |
-| **Character-select confirmation** | The `P1_POS` / `P2_POS` addresses need a 60-second live check — see [docs/CALIBRATION.md](docs/CALIBRATION.md) §1. |
+| **The Kombat submenu** | The play-mode list (Arcade / Versus / Practice / …) that opens from "Kombat" isn't read yet — its screen-proc and cursor need a live `tools/proc_log.py` trace. |
+| **Chess Kombat character select** | Reads nothing today — it uses a screen-proc not yet in the daemon's `_CS_PROCS` set. Needs one `proc_log.py` capture on that screen. |
+| **The Options screens** | `p_game_options` (0x801ad198) is identified but its cursor + row labels + the Gameplay / Audio / Video / Controller sub-screens are unmapped. This is the top request — it's what stops a blind player changing settings alone. |
+| **The pause menu** | `p_pause_menu` (0x801ad2d0) — identified, not wired. |
+| **Match start** | Announce "\<left fighter\> versus \<right fighter\>" once when a round begins (MK:DA already does this — port the pattern). |
 | **Other regions** | Addresses for PAL (`GQNP5D`), German (`GQND5D`), Japan (`GQNJ5D`). The method is in [docs/CALIBRATION.md](docs/CALIBRATION.md) §2 — it's reading a symbol table, not guessing. |
-| **More screens** | Practice sub-menus, the Krypt grid, the profile name-entry keyboard, in-match round/health callouts. The menu mechanism in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) covers the standard menus; these screens use different variables. |
 | **Speech backends** | Better interruption on Linux, a `pyttsx3` path, NVDA/Tolk on Windows for people who already run a screen reader. |
 | **Other GameCube games** | The whole approach (`ra_client.py` + a per-game `*_addrs.py`) generalises. A sibling repo or a `games/` folder — open an issue to discuss. |
+
+### Out of scope for this repo — but a contributor is welcome to take them on
+
+The maintainer plays this game offline with no profile, so the following are **not
+being worked on here**. If you want them, they'd make great standalone contributions —
+open an issue first so we can point you at the right screen-procs:
+
+- **Online / network play** — anything behind "Go Online".
+- **Profiles** — the profile create / load / name-entry keyboard screens.
+- **The Krypt** — the koin-spend unlock grid (needs a profile).
+- **Konquest** — the story mode (`p_konquest_*` procs; its own pause menu at `p_konquest_pause_menu` 0x801800d0).
 
 ## Development setup
 

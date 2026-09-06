@@ -17,13 +17,22 @@ identical on every host. See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
 ## Status
 
-- **Verified live:** the character-select roster read (fighter names as you move
-  across the roster).
-- **Resolved, needs a 30-second confirm on first play:** the main-menu cursor —
-  see [docs/CALIBRATION.md](docs/CALIBRATION.md).
-- **Not yet wired:** pause menu, arena / fighting-style / difficulty sub-screens,
-  Chess Kombat and Puzzle Kombat board cursors, Konquest. The V key / R3 OCR
-  narrator (if you set it up, as in the DA project) covers those meanwhile.
+- **Working, tested live:**
+  - **Main menu** — "Kombat, 1 of 8" … "Game Options, 8 of 8" as you move up/down.
+  - **Character select** — the hovered fighter for both players, on the Versus,
+    Arcade and Puzzle Kombat select screens ("Player 1: Scorpion").
+  - Keypress → speech is fast (single small memory read per poll once the screen
+    is known).
+- **How it knows which screen you're on:** it reads the game's active
+  screen-procedure pointer (`func_addr$283` at `0x80510204`) and matches it
+  against the symbol map — see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+- **Not yet wired:** the Kombat submenu (Arcade / Versus / Practice list), Chess
+  Kombat character select, the Options screens, the pause menu, match-start
+  "X versus Y", arena / fighting-style pick. See
+  [CONTRIBUTING.md](CONTRIBUTING.md) — several of these just need one calibration
+  trace. The V key / R3 OCR narrator (as in the DA project) covers them meanwhile.
+- **Deliberately out of scope:** online play, Profiles, the Krypt, Konquest —
+  see [CONTRIBUTING.md](CONTRIBUTING.md) if you'd like to add them.
 
 ## Requirements
 

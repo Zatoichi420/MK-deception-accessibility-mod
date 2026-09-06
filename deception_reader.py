@@ -25,8 +25,13 @@ from ra_client import RAClient, RetroArchError
 import deception_addrs as A
 from speak import Speaker
 
-POLL_HZ = 20
-SETTLE_S = 0.06
+POLL_HZ = 30
+SETTLE_S = 0.05          # floor between spoken lines; cursor moves interrupt anyway
+TARGET_RECHECK_S = 5.0
+FASTPATH_MAX = 8         # consecutive polls before forcing a full re-classify snapshot
+
+_KEEP_CAPS = {"MK", "CPU", "TV", "AI", "HP"}
+
 
 def read_cstring(ra: RAClient, addr: int, maxlen: int = 48) -> str:
     if not (0x80003000 <= addr < 0x81800000):
@@ -37,27 +42,50 @@ def read_cstring(ra: RAClient, addr: int, maxlen: int = 48) -> str:
         raw = raw[:nul]
     return raw.decode("latin1", "replace").strip()
 
+
+def prettify(label: str) -> str:
+    """Title-case for TTS without mangling all-caps words we want kept."""
+    out = []
+    for w in label.split():
+        if w.upper() in _KEEP_CAPS:
+            out.append(w.upper())
+        elif w.isupper() and w.isalpha():
+            out.append(w.capitalize())
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
 class Ctx:
     IDLE = "idle"
     MENU = "menu"
     CHARSELECT = "charselect"
+
 
 class DeceptionReader:
     def __init__(self, ra: RAClient, speaker: Speaker | None = None):
         self.ra = ra
         self.say = speaker or Speaker()
         self._last_key = None
-        self._pending = None
-        self._pending_since = 0.0
         self._last_ctx = None
         self._ctx_candidate = None
         self._ctx_streak = 0
-        self._roster_cache: dict[int, str] = {}
+        self._last_say_at = -1e9
+        self._roster_cache: dict[tuple, str] = {}
         self._region_warned = False
+        self._target_ok = False
+        self._target_checked_at = -1e9
+        self._last_snap: dict | None = None
+        self._fast_count = 0
 
     # -- game detection --------------------------------------------------
 
     def is_target_game(self) -> bool:
+        now = time.monotonic()
+        if self._target_ok and now - self._target_checked_at < TARGET_RECHECK_S:
+            return True
+        self._target_checked_at = now
+        self._target_ok = False
         try:
             st = self.ra.status()
         except RetroArchError:
@@ -72,12 +100,14 @@ class DeceptionReader:
         except RetroArchError:
             return False
         if disc == b"GQNE5D":
+            self._target_ok = True
             return True
-        if disc in (b"GQNP5D", b"GQND5D", b"GQNJ5D"):
+        if disc in (b"GQNP5D", b"GQND5D", b"GQNJ5D", b"GQNF5D", b"GQNI5D"):
             if not self._region_warned:
                 print(f"note: non-USA build ({disc.decode('latin1')}); addresses are USA "
                       "(GQNE5D) and may be wrong.", flush=True)
                 self._region_warned = True
+            self._target_ok = True
             return True
         return False
 
@@ -88,13 +118,16 @@ class DeceptionReader:
         if key in self._roster_cache:
             return self._roster_cache[key]
         name = ""
-        if A.ROSTER_FROM_MEMORY and 0 <= slot < A.SELBOX_MAX:
+        if not pz:
+            name = A.PSELECT_SLOT_NAMES.get(slot, "")
+        if not name and 0 <= slot < A.SELBOX_MAX:
             try:
                 tbl = A.PSELECT_PZ_CHAR_TBL if pz else A.PSELECT_CHAR_TBL
                 cid = self.ra.read_u32(tbl + slot * A.PSELECT_CHAR_STRIDE)
                 if 0 <= cid < 64:
-                    namep = self.ra.read_u32(A.GLOBAL_PLAYER_DATA + cid * A.GLOBAL_PLAYER_STRIDE)
-                    name = read_cstring(self.ra, namep, 24).title()
+                    namep = self.ra.read_u32(
+                        A.GLOBAL_PLAYER_DATA + cid * A.GLOBAL_PLAYER_STRIDE)
+                    name = prettify(read_cstring(self.ra, namep, 24))
             except RetroArchError:
                 name = ""
         if not name and not pz and 0 <= slot < len(A.ROSTER):
@@ -106,57 +139,87 @@ class DeceptionReader:
 
     # -- snapshot ----------------------------------------------------
 
+    _CS_PROCS = (A.P_PSELECT, A.P_PZ_PSELECT, A.P_BG_PSELECT)
+
     def snapshot(self) -> dict:
-        """RetroArch's command interface handles ~1 command per emulated frame
-        (~16 ms), so read in a few blocks, not one call per variable."""
+        """RetroArch handles ~1 command per emulated frame (~16 ms), so read in a
+        few blocks, not one call per variable. The screen is identified by the
+        active screen-proc pointer (func_addr$283); once known, the fast path
+        reads just that pointer + the one block whose values change as you move
+        the cursor (2 reads/poll). Every FASTPATH_MAX polls we take the full read
+        so nothing is missed."""
         r = self.ra
-        a = r.read_memory(0x805107f8, 64)     # arena_active .. pselect_mode cluster
-        b = r.read_memory(0x80510e44, 20)     # menu_mode_var / _sub_var / arena_sub_menu_var
+        prev = self._last_snap
+        ctx = self._last_ctx
+
+        proc = r.read_u32(A.SCREEN_PROC_PTR)
+
+        if prev is not None and self._fast_count < FASTPATH_MAX:
+            if ctx == Ctx.MENU and proc == A.P_MAIN_MENU:
+                b = r.read_memory(A.MENU_MODE_VAR, 8)
+                self._fast_count += 1
+                s = dict(prev, screen_proc=proc,
+                         menu_mode=int.from_bytes(b[0:4], "big"),
+                         menu_sub=int.from_bytes(b[4:8], "big"))
+                self._last_snap = s
+                return s
+            if ctx == Ctx.CHARSELECT and proc in self._CS_PROCS:
+                a = r.read_memory(0x80510820, 24)
+                self._fast_count += 1
+                s = dict(prev, screen_proc=proc,
+                         p1_selbox=int.from_bytes(a[0x0c:0x10], "big"),
+                         p2_selbox=int.from_bytes(a[0x08:0x0c], "big"),
+                         pselect_mode=int.from_bytes(a[0x14:0x18], "big"),
+                         arena_active=int.from_bytes(a[0x00:0x04], "big"))
+                self._last_snap = s
+                return s
+
+        self._fast_count = 0
+        b = r.read_memory(A.MENU_MODE_VAR, 8)
+        a = r.read_memory(0x805107f8, 64)     # f_arena_select_active .. pselect_mode + more
 
         def ua(addr):
             o = addr - 0x805107f8
             return int.from_bytes(a[o:o + 4], "big")
 
-        def ub(addr):
-            o = addr - 0x80510e44
-            return int.from_bytes(b[o:o + 4], "big")
-
-        return {
-            "menu_mode": ub(A.MENU_MODE_VAR),
-            "menu_sub": ub(A.MENU_MODE_SUB_VAR),
-            "arena_sub": ub(A.ARENA_SUB_MENU_VAR),
+        s = {
+            "screen_proc": proc,
+            "menu_mode": int.from_bytes(b[0:4], "big"),
+            "menu_sub": int.from_bytes(b[4:8], "big"),
             "pselect_mode": ua(A.PSELECT_MODE),
             "p1_selbox": ua(A.P1_SELBOX_POS),
             "p2_selbox": ua(A.P2_SELBOX_POS),
             "arena_active": ua(A.F_ARENA_SELECT_ACTIVE),
-            "mode_of_play": r.read_u32(A.MODE_OF_PLAY),
         }
+        self._last_snap = s
+        return s
 
     # -- classify + narrate ---------------------------------------
 
     def _classify(self, s: dict) -> str:
-        if s["pselect_mode"] and 0 <= s["p1_selbox"] < A.SELBOX_MAX:
+        proc = s.get("screen_proc")
+        if proc in self._CS_PROCS:
             return Ctx.CHARSELECT
-        # main menu: a small stable sub-index and not in a match
-        if s["mode_of_play"] in (0, 8) and 0 <= s["menu_sub"] < len(A.MAIN_MENU_LABELS):
+        if proc == A.P_MAIN_MENU and s["menu_mode"] in A.MAIN_MENU_BY_MODE:
             return Ctx.MENU
         return Ctx.IDLE
 
     def _menu_utt(self, s: dict):
-        i = s["menu_sub"]
-        n = len(A.MAIN_MENU_LABELS)
-        label = A.MAIN_MENU_LABELS[i] if 0 <= i < n else f"item {i + 1}"
+        mode = s["menu_mode"]
+        label = A.MAIN_MENU_BY_MODE.get(mode, f"item {mode}")
         try:
-            p = self.ra.read_u32(A.MAIN_MENU_STRINGS + i * 4)
-            live = read_cstring(self.ra, p, 24)
-            if live:
-                label = live
-        except RetroArchError:
-            pass
-        return ("menu", i, label), f"{label}, {i + 1} of {n}", "Main menu"
+            pos = A.MAIN_MENU_NAV_ORDER.index(mode) + 1
+            n = len(A.MAIN_MENU_NAV_ORDER)
+            where = f"{label}, {pos} of {n}"
+        except ValueError:
+            where = label
+        return ("menu", mode), where
 
     def _cs_utt(self, s: dict):
-        pz = s["pselect_mode"] == 2
+        if s.get("arena_active"):
+            # picking a stage, not a fighter — arena-name lookup isn't wired yet
+            return ("arena",), "Arena select"
+        pz = s.get("screen_proc") == A.P_PZ_PSELECT
         parts, kb = [], ["cs"]
         for pnum, pos in ((1, s["p1_selbox"]), (2, s["p2_selbox"])):
             if 0 <= pos < A.SELBOX_MAX:
@@ -164,11 +227,19 @@ class DeceptionReader:
                 kb.append((pnum, pos))
         if not parts:
             return None
-        return tuple(kb), " . ".join(parts), "Character select"
+        return tuple(kb), " . ".join(parts)
+
+    def _speak(self, text: str, prefix: str | None):
+        now = time.monotonic()
+        if prefix:
+            text = f"{prefix}. {text}"
+        elif now - self._last_say_at < SETTLE_S:
+            return
+        self.say.say(text)
+        self._last_say_at = now
 
     def narrate(self, s: dict):
         raw_ctx = self._classify(s)
-        now = time.monotonic()
 
         # a new non-idle context must hold for two polls before we act on it
         if raw_ctx == self._ctx_candidate:
@@ -180,51 +251,61 @@ class DeceptionReader:
         else:
             return
 
-        if ctx != self._last_ctx:
+        ctx_changed = ctx != self._last_ctx
+        if ctx_changed:
             self._last_ctx = ctx
-            if ctx == Ctx.CHARSELECT:
-                self.say.say("Character select")
-            elif ctx == Ctx.MENU:
-                self.say.say("Main menu")
-            self._last_key = self._pending = None
+            self._last_key = None
 
-        u = self._menu_utt(s) if ctx == Ctx.MENU else self._cs_utt(s) if ctx == Ctx.CHARSELECT else None
+        if ctx == Ctx.MENU:
+            u = self._menu_utt(s)
+        elif ctx == Ctx.CHARSELECT:
+            u = self._cs_utt(s)
+        else:
+            return
         if u is None:
             return
-        key, text, _ = u
+        key, text = u
         if key == self._last_key:
             return
-        if key != self._pending:
-            self._pending, self._pending_since = key, now
-            return
-        if now - self._pending_since >= SETTLE_S:
-            self.say.say(text)
-            self._last_key, self._pending = key, None
+        self._last_key = key
+
+        prefix = None
+        if ctx_changed:
+            prefix = {Ctx.MENU: "Main menu", Ctx.CHARSELECT: "Character select"}[ctx]
+        self._speak(text, prefix)
 
     def run(self):
         period = 1.0 / POLL_HZ
         waited = False
         while True:
+            t0 = time.monotonic()
             try:
                 if not self.is_target_game():
                     if not waited:
                         print("waiting for MK: Deception to be running...", flush=True)
                         waited = True
+                    self._last_snap = None
                     time.sleep(1.5)
                     continue
                 waited = False
                 self.narrate(self.snapshot())
             except RetroArchError as e:
                 print(f"(retro) {e}", flush=True)
+                self._target_ok = False
+                self._last_snap = None
                 time.sleep(0.7)
             except KeyboardInterrupt:
                 return
-            time.sleep(period)
+            time.sleep(max(0.0, period - (time.monotonic() - t0)))
+
 
 def _fmt(s: dict) -> str:
-    return (f"menu_mode={s['menu_mode']} menu_sub={s['menu_sub']} arena_sub={s['arena_sub']} "
-            f"| pselect_mode={s['pselect_mode']} p1_selbox={s['p1_selbox']} p2_selbox={s['p2_selbox']} "
-            f"arena_active={s['arena_active']} mode_of_play={s['mode_of_play']}")
+    proc = s.get("screen_proc", 0)
+    name = A.SCREEN_PROC_NAMES.get(proc, "?")
+    return (f"proc={proc:#010x}({name}) menu_mode={s['menu_mode']} menu_sub={s['menu_sub']} "
+            f"| pselect_mode={s['pselect_mode']} p1_selbox={s['p1_selbox']} "
+            f"p2_selbox={s['p2_selbox']} arena_active={s['arena_active']}")
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -251,8 +332,10 @@ def main():
                 return
             time.sleep(0.25)
 
-    print(f"mk-deception talking-menu daemon: watching RetroArch on {args.host}:{args.port}", flush=True)
+    print(f"mk-deception talking-menu daemon: watching RetroArch on {args.host}:{args.port}",
+          flush=True)
     DeceptionReader(ra).run()
+
 
 if __name__ == "__main__":
     main()
